@@ -1,1 +1,6 @@
 discord.py[voice]==2.7.1
+# discord.py 2.7.1 doesn't support davey 0.2 (voice stays silent): keep davey on 0.1.x
+davey==0.1.7
+edge-tts==7.3.1
+imageio-ffmpeg==0.8.1
+pytest==9.2.0

@@ -2,11 +2,16 @@
 #Made by Arturo Jorge
 #Version: 2.0.0
 
+import io
 import os
+import random
 import discord
 import asyncio
+import imageio_ffmpeg
 from discord.ext import commands
 from constants import *
+from chistes import load_jokes, find_joke, synthesize, speech_text, JokeAPIError, JokeCacheError
+from voice_utils import wait_until_voice_ready
 
 GIF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'res', 'fish-react.gif')
 
@@ -143,6 +148,112 @@ async def fishreact(ctx):
 @client.command()
 async def bazinga(ctx):
     await ctx.send("BAZINGA!")
+
+
+voice_locks = {}  # guild id -> Lock, so the bot says only one thing at a time per server
+
+
+def get_free_voice_lock(ctx):
+    """Return the server's voice lock, or None if the bot is already talking.
+
+    Checked before moving the bot, so speech in another channel is never cut off.
+    """
+    lock = voice_locks.setdefault(ctx.guild.id, asyncio.Lock())
+    if lock.locked() or (ctx.voice_client and ctx.voice_client.is_playing()):
+        return None
+    return lock
+
+
+async def speak(ctx, text):
+    """Join the author's voice channel and say the text with TTS."""
+    channel = ctx.author.voice.channel
+    vc = ctx.voice_client
+    if vc is None:
+        vc = await channel.connect()
+    elif vc.channel != channel:
+        await vc.move_to(channel)
+
+    try:
+        audio = await synthesize(text)
+    except Exception:
+        await ctx.send("I couldn't speak this time.")
+        return
+
+    # Right after joining, audio is dropped until voice encryption is ready.
+    await wait_until_voice_ready(vc)
+
+    vc.play(discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True, executable=imageio_ffmpeg.get_ffmpeg_exe()))
+
+
+@client.command()
+async def chiste(ctx, joke_id: int = None):
+    if not ctx.author.voice:
+        await ctx.send("You need to be in a voice channel to hear a joke.")
+        return
+
+    lock = get_free_voice_lock(ctx)
+    if lock is None:
+        await ctx.send("I'm already telling a joke.")
+        return
+
+    async with lock:
+        await tell_joke(ctx, joke_id)
+
+
+async def tell_joke(ctx, joke_id):
+    try:
+        jokes = await load_jokes()
+    except JokeAPIError:
+        await ctx.send("I couldn't download jokes, try again later.")
+        return
+    except JokeCacheError as e:
+        await ctx.send(f"res/chistes.json has an error: {e}")
+        return
+
+    if joke_id is None:
+        joke = random.choice(jokes)
+    else:
+        joke = find_joke(jokes, joke_id)
+        if joke is None:
+            await ctx.send(f"There's no joke with id {joke_id}.")
+            return
+
+    # Only spoken: the joke text is never sent to the chat.
+    await speak(ctx, speech_text(joke))
+
+
+@chiste.error
+async def chiste_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send("The joke id must be a number.")
+    else:
+        await ctx.send("Something went wrong telling the joke.")
+        raise error
+
+
+@client.command()
+async def say(ctx, *, message: commands.clean_content):
+    # clean_content turns mentions like <@123> into readable @names.
+    if not ctx.author.voice:
+        await ctx.send("You need to be in a voice channel so I can talk.")
+        return
+
+    lock = get_free_voice_lock(ctx)
+    if lock is None:
+        await ctx.send("I'm already talking.")
+        return
+
+    async with lock:
+        await speak(ctx, message)
+
+
+@say.error
+async def say_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Tell me what to say: &say <message>")
+    else:
+        await ctx.send("Something went wrong saying that.")
+        raise error
 
 
 @client.command()
