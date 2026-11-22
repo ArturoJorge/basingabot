@@ -1,11 +1,14 @@
 #Basinga bot 
 #Made by Arturo Jorge
-#Version: 1.3.1
+#Version: 2.0.0
 
+import os
 import discord
 import asyncio
 from discord.ext import commands
 from constants import *
+
+GIF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'res', 'fish-react.gif')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -32,6 +35,10 @@ class VoteButtons(discord.ui.View):
         global negative_votes
         user_id = interaction.user.id
 
+        if user_id not in memids:
+            await interaction.response.send_message("Only people in the voice channel can vote.", ephemeral=True)
+            return
+
         if user_id in voted_users:
             await interaction.response.send_message("You have already voted.", ephemeral=True)
             return
@@ -50,6 +57,10 @@ class VoteButtons(discord.ui.View):
         global positive_votes
         user_id = interaction.user.id
 
+        if user_id not in memids:
+            await interaction.response.send_message("Only people in the voice channel can vote.", ephemeral=True)
+            return
+
         if user_id in voted_users:
             await interaction.response.send_message("You have already voted.", ephemeral=True)
             return
@@ -65,11 +76,12 @@ class VoteButtons(discord.ui.View):
     async def on_timeout(self):
         self.value = False
         self.stop()
+        self.votes_event.set()  # wake up wait() so the vote ends
 
     async def wait(self):
         global positive_votes
         global negative_votes
-        while positive_votes < len(memids) / 2 and negative_votes <= len(memids) / 2:
+        while self.value and positive_votes < len(memids) / 2 and negative_votes <= len(memids) / 2:
             await self.votes_event.wait()
             self.votes_event.clear()
 
@@ -85,9 +97,11 @@ async def vtk(ctx, *, member: discord.Member):
     memids = []
     voted_users = set()
 
-    channel_id = ctx.message.author.voice.channel.id
-    v_channel = client.get_channel(channel_id)
-    members = v_channel.members
+    if not ctx.author.voice:
+        await ctx.send("You need to be in a voice channel to start a votekick.")
+        return
+
+    members = ctx.author.voice.channel.members
 
     for mem in members:
         memids.append(mem.id)
@@ -112,10 +126,14 @@ async def on_ready():
 async def fishreact(ctx):
     fishes = ('🐟', '🎣', '🐠', '🐡', '🦈', '🐬', '🐳', '🐋', '🦐', '🦑', '🐙')
 
+    if ctx.message.reference is None:
+        await ctx.send("Reply to a message to fishreact it.")
+        return
+
     target_id = ctx.message.reference.message_id
     target_message = await ctx.fetch_message(target_id)
     await ctx.message.delete()
-    with open('res/fish-react.gif', 'rb') as f:
+    with open(GIF_PATH, 'rb') as f:
         picture = discord.File(f)
         await ctx.send(file=picture)
     for fish in fishes:
@@ -127,7 +145,7 @@ async def bazinga(ctx):
     await ctx.send("BAZINGA!")
 
 
-@client.command(pass_content = True)
+@client.command()
 async def join(ctx):
     if (ctx.author.voice):
         channel = ctx.message.author.voice.channel
@@ -135,17 +153,17 @@ async def join(ctx):
     else:
         await ctx.send("Not in a channel, can't join.")
 
-@client.command(pass_content = True)
+@client.command()
 async def leave(ctx):
     if (ctx.voice_client):
         await ctx.guild.voice_client.disconnect()
     else:
-        ctx.send("Not in a voice channel.")
+        await ctx.send("Not in a voice channel.")
 
 @client.command()
 async def prueba(ctx):
     
-    view = VoteButtons()
+    view = VoteButtons(ctx)
     await ctx.reply("Vota:", view=view)
 
 
